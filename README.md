@@ -24,17 +24,32 @@ devices accept colours from Chroma apps.
 
 **2. Synapse is the master for Razer gear (`razer_skip = all`).** Some devices, such as the Kraken V4
 headset, ignore Chroma apps and only follow Synapse's own effects. In this mode Synapse runs
-Spectrum Cycling on every Razer device and the bridge drives only the ASUS side and DSX. The bridge's
-cycle is tied to the PC clock, and `speed` and `phase` in `settings.ini` line it up with Synapse's
-cycle. This is timed, not locked, so it can drift over long sessions.
+Spectrum Cycling on every Razer device and the bridge drives only the ASUS side and DSX. By default
+the bridge's cycle is tied to the PC clock, and `speed` and `phase` in `settings.ini` line it up with
+Synapse's cycle. This is timed, not locked, so it can drift over long sessions, and Synapse restarts
+its cycle after Windows is locked (`clock_anchor = unlock` helps with that).
 
-### Why not read Synapse's colours directly?
+### Following Synapse's colour feed (`razer_app_id`)
 
-Razer does publish a colour feed for third-party lighting (Chroma Connect / Chroma Broadcast), but
-Synapse only sends it to applications with a Razer-issued application ID. `src/ChromaBroadcast.cs`
-contains a receive-only client for that feed. It is not used by the sync today: without an ID,
-`Init` returns 4309 ("Setup required for Test AppId"). If Razer issues an ID for this project, mode 2
-becomes an exact lock with Synapse.
+Razer publishes a colour feed for third-party lighting (Chroma Connect / Chroma Broadcast). With it,
+mode 2 becomes an exact lock: the bridge receives the colour Synapse is showing and passes it to the
+ASUS side and DSX, so there is nothing to tune and nothing to drift. When the feed has nothing (Synapse
+closed, restarting, or not started yet after sign-in), the bridge falls back to the clock effect and
+reconnects by itself.
+
+Synapse only sends the feed to applications with a Razer-issued application ID. This project has asked
+Razer for one; until it arrives, **`razer_app_id` is `off` by default** and the bridge behaves exactly
+as before.
+
+For local testing, `razer_app_id = auto` tries the 64 IDs published in the open-source
+[OpenChromaConnect](https://github.com/OpenChromaConnect/ChromaBroadcastAPI) headers (MIT) until
+Synapse accepts one. These are other brands' IDs, not ones Razer issued to this project: Synapse shows
+the bridge under that brand's name in Chroma Connect, and an update may stop accepting them.
+`4-scan-razer-ids.cmd` shows which ID works on your PC and checks that colours arrive. Once Razer
+issues an ID, set `razer_app_id = {that ID}`.
+
+While the feed is on, the bridge leaves every Razer device to Synapse whatever `razer_skip` says, since
+it would otherwise receive its own colours back.
 
 ## Requirements
 
@@ -51,13 +66,16 @@ becomes an exact lock with Synapse.
 2. `1b-find-fan-header.cmd` - lights each ASUS device in a different colour so you can tell which is which.
 3. `2-test-razer.cmd` - checks that the Razer devices accept colours.
 4. Edit `settings.ini` (effect, speed, which devices to drive).
-5. `3-run-bridge.cmd` - runs the sync in a window, or `install-startup.cmd` to install it as a
+5. Optional: `4-scan-razer-ids.cmd` - checks whether Synapse's colour feed works on this PC
+   (see `razer_app_id` above).
+6. `3-run-bridge.cmd` - runs the sync in a window, or `install-startup.cmd` to install it as a
    scheduled task that starts at sign-in with administrator rights.
 
 `start-sync.cmd` and `stop-sync.cmd` start and stop the installed task without an admin prompt.
 `uninstall-startup.cmd` removes it. `dsx-test.cmd` checks the DSX connection.
 
-All scripts write a log to `logs\`.
+All scripts write a log to `logs\`. If an ASUS write ever hangs, the installed copy restarts itself
+(at most 5 times per sign-in); the windowed copy is restarted by `3-run-bridge.cmd`.
 
 ## Settings
 
@@ -69,6 +87,8 @@ All scripts write a log to `logs\`.
 | `color` | `#RRGGBB` or a colour name, for static and breathing |
 | `speed` | seconds per cycle |
 | `phase` | seconds to shift the cycle (to line up with Synapse in mode 2) |
+| `clock_anchor` | `fixed` (count from a fixed date) or `unlock` (count from the last unlock or wake, when Synapse restarts its cycle) |
+| `razer_app_id` | `off` (default), `auto`, or one app ID: follow Synapse's colour feed (see above) |
 | `brightness`, `asus_brightness` | 1-100 |
 | `maxfps` | updates per second |
 | `razer_style` | `auto`, `static`, `custom` (per-LED command) |
@@ -83,6 +103,9 @@ All scripts write a log to `logs\`.
   In-Game lighting effects > Game list.
 - In Synapse 4, any active Chroma app takes over all Razer devices, regardless of the device mask the
   app registers with.
+- With the colour feed, the Chroma Connect page's effect decides what the bridge receives. An Advanced
+  Effect that doesn't light Chroma Connect devices sends black, so the ASUS side goes dark; pick an
+  effect that covers them (for example Quick Effects > Spectrum Cycling).
 - Tested with: BlackWidow V4 X, DeathAdder V2, Base Station V2 Chroma, Kraken V4, ROG STRIX X870-F
   GAMING WIFI, DSX 3.1.7.
 
@@ -90,6 +113,8 @@ All scripts write a log to `logs\`.
 
 `build.cmd [main|test|bg]` compiles `src\*.cs` with
 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`. The code is C# 5 so that compiler accepts it.
+`build.cmd selftest` builds `AuraChromaBridge-selftest.exe` from `src` and `tests`; run it from the
+project folder to check the parts that need no Razer or ASUS hardware.
 
 ## Licence
 

@@ -111,6 +111,7 @@ namespace AuraChromaBridge
         public int Register()
         {
             _callback = OnEvent;
+            NativeCallbacks.Keep(_callback);   // Razer may call it even after this object is gone
             int result = _register(_callback);
             _registered = result == 0;
             return result;
@@ -148,7 +149,11 @@ namespace AuraChromaBridge
         {
             try
             {
-                if (_registered) _unregister();
+                if (_registered)
+                {
+                    int r = _unregister();
+                    if (r != 0) Log.Line("Feed: Razer's UnRegisterEventNotification returned {0} = {1}.", r, Describe(r));
+                }
             }
             catch (Exception)
             {
@@ -157,7 +162,11 @@ namespace AuraChromaBridge
 
             try
             {
-                if (_initialized) _uninit();
+                if (_initialized)
+                {
+                    int r = _uninit();
+                    if (r != 0) Log.Line("Feed: Razer's UnInit returned {0} = {1}.", r, Describe(r));
+                }
             }
             catch (Exception)
             {
@@ -354,6 +363,22 @@ namespace AuraChromaBridge
             StringBuilder sb = new StringBuilder(1024);
             uint n = GetModuleFileName(module, sb, sb.Capacity);
             return n == 0 ? null : sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Callbacks handed to Razer's DLL, kept for the life of the process. Razer holds a raw pointer, and its threads
+    /// may still call it while winding down after we unregister; if .NET collected the delegate by then, that call
+    /// would crash the bridge with nothing able to catch it. A few bytes per reconnect.
+    /// </summary>
+    internal static class NativeCallbacks
+    {
+        private static readonly List<Delegate> Kept = new List<Delegate>();
+
+        public static void Keep(Delegate callback)
+        {
+            if (callback == null) return;
+            lock (Kept) Kept.Add(callback);
         }
     }
 }

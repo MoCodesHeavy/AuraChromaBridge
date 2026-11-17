@@ -299,6 +299,7 @@ namespace AuraChromaBridge
         private static volatile bool _stop;
         private static volatile bool _reconnect;
         private static long _writeStarted;   // Stopwatch timestamp while an ASUS write is in progress, else 0
+        private static long _anchorUtcTicks;  // last start, unlock or wake: where clock_anchor = unlock counts from
         private static ConsoleCtrlHandler _ctrlHandler;
         private static Mutex _instance;
 
@@ -314,6 +315,18 @@ namespace AuraChromaBridge
             // Only one sync at a time - two would fight over the same lights.
             bool firstCopy;
             _instance = new Mutex(true, @"Local\AuraChromaBridge.Sync", out firstCopy);
+            if (!firstCopy && Program.RelaunchCount > 0)
+            {
+                // Started by a copy that is still exiting: give it a moment to let go.
+                try
+                {
+                    firstCopy = _instance.WaitOne(15000);
+                }
+                catch (AbandonedMutexException)
+                {
+                    firstCopy = true;   // it exited without letting go, which is expected after the watchdog
+                }
+            }
             if (!firstCopy)
             {
                 Log.Line("Another copy of the sync is already running - this one is exiting.");
@@ -334,10 +347,19 @@ namespace AuraChromaBridge
             WatchLockAndSleep();
             StartWatchdog();
 
+            SetAnchor();
             RazerSdk razer = ConnectRazer(settings, true);
             List<AuraDevice> devices;
             Aura aura = ConnectAura(settings, out devices, true);
-            if (razer == null && aura == null && settings.RazerMask != 0)
+            bool feedNotReady;             // Razer's feed wasn't up yet when we tried (normal right after sign-in)
+            Feed feed = ConnectFeed(settings, out feedNotReady);
+            int feedStartTries = 0;
+            long nextFeedStart = 60000;
+            bool usingFeed = false;        // which colour source the last frame used, to log changes once
+            bool feedRetry = false;        // the feed stalled and reconnecting hasn't worked yet
+            long nextFeedReconnect = 0;
+            long feedRetryWait = 30000;
+            if (razer == null && aura == null && settings.EffectiveRazerMask != 0)
             {
                 Log.Line("Neither Razer nor ASUS could be reached - stopping.");
                 return 1;
@@ -387,6 +409,7 @@ namespace AuraChromaBridge
                     if (lastLoop > 0 && now - lastLoop > 15000)
                     {
                         Log.Line("Woke up after {0:0} s - reconnecting.", (now - lastLoop) / 1000.0);
+                        SetAnchor();
                         _reconnect = true;
                     }
                     lastLoop = now;
@@ -414,6 +437,12 @@ namespace AuraChromaBridge
                         }
                         razer = ConnectRazer(settings, true);
                         aura = ConnectAura(settings, out devices, true);
+                        if (feed != null) feed.Dispose();
+                        feed = ConnectFeed(settings, out feedNotReady);
+                        feedStartTries = 0;
+                        nextFeedStart = clock.ElapsedMilliseconds + 60000;
+                        feedRetry = false;
+                        feedRetryWait = 30000;
                         lastLoop = clock.ElapsedMilliseconds;   // a slow ASUS connect is not a sleep/wake gap
                         buffers.Clear();
                         lastRazerColor = -1;
@@ -448,8 +477,20 @@ namespace AuraChromaBridge
                             settingsStamp = stamp;
                             Settings fresh = Settings.Load(Program.SettingsPath);
                             bool filterChanged = fresh.DeviceFilterKey != settings.DeviceFilterKey;
-                            bool razerDevicesChanged = fresh.RazerMask != settings.RazerMask;
+                            bool razerDevicesChanged = fresh.EffectiveRazerMask != settings.EffectiveRazerMask;
+                            bool feedChanged = fresh.FeedKey != settings.FeedKey;
                             settings = fresh;
+                            if (feedChanged)
+                            {
+                                Log.Line("Feed: razer_app_id is now {0}.", settings.FeedKey);
+                                if (feed != null) feed.Dispose();
+                                feed = ConnectFeed(settings, out feedNotReady);
+                                feedStartTries = 0;
+                                nextFeedStart = clock.ElapsedMilliseconds + 60000;
+                                feedRetry = false;
+                                feedRetryWait = 30000;
+                                lastLoop = clock.ElapsedMilliseconds;   // trying IDs is not a sleep/wake gap
+                            }
                             Log.Line("settings.ini changed: {0}", settings);
                             if (filterChanged && aura != null)
                             {
@@ -485,10 +526,61 @@ namespace AuraChromaBridge
                         }
                     }
 
-                    // Wall-clock time, so the cycle position is the same after every restart and 'phase' can line it up with Synapse.
+                    // Razer's feed wasn't up yet: try again after 1, 2, 4 and 8 minutes. Not when Synapse refused the
+                    // IDs - that answer doesn't change, and every try writes to Razer's own log.
+                    if (feed == null && feedNotReady && now >= nextFeedStart)
+                    {
+                        feedStartTries++;
+                        feed = Feed.Connect(settings, true, out feedNotReady);
+                        if (feed == null && feedNotReady)
+                        {
+                            if (feedStartTries >= 4)
+                            {
+                                feedNotReady = false;
+                                Log.Line("Feed: still not ready - using the clock effect until the next unlock, wake or settings change.");
+                            }
+                            else
+                            {
+                                nextFeedStart = clock.ElapsedMilliseconds + (60000L << feedStartTries);
+                            }
+                        }
+                        lastLoop = clock.ElapsedMilliseconds;
+                    }
 
-                    double t = (DateTime.UtcNow - EffectEpoch).TotalSeconds + settings.Phase;
-                    int baseColor = Effects.Base(settings, t);
+                    // An animation stopped arriving: Synapse closed, restarted, or switched to a static colour. Reconnect with
+                    // the same ID (checked before the colour is read, so a reconnect that works shows no clock colour),
+                    // waiting 30 s, then longer each time it fails (up to 10 min), so Razer's own log stays small.
+                    if (feed != null && (feedRetry || feed.IsStalled) && now >= nextFeedReconnect)
+                    {
+                        if (!feedRetry) Log.Line("Feed: no new colours from Synapse for 5 s - reconnecting to check.");
+                        bool ok = feed.Reconnect();
+                        if (ok)
+                        {
+                            feedRetryWait = 30000;
+                        }
+                        else
+                        {
+                            if (!feedRetry) Log.Line("Feed: reconnecting didn't work - trying again in a while.");
+                            feedRetryWait = Math.Min(feedRetryWait * 2, 600000);
+                        }
+                        feedRetry = !ok;
+                        nextFeedReconnect = clock.ElapsedMilliseconds + feedRetryWait;
+                        lastLoop = clock.ElapsedMilliseconds;
+                    }
+
+                    // Synapse's own colour when the feed has one; otherwise the clock effect, which counts wall-clock
+                    // time (clock_anchor = fixed) or time since the last unlock (clock_anchor = unlock).
+                    double t = Effects.ClockSeconds(settings, new DateTime(Interlocked.Read(ref _anchorUtcTicks), DateTimeKind.Utc), DateTime.UtcNow);
+                    int feedColor = 0;
+                    bool fromFeed = feed != null && feed.TryGetColor(out feedColor);
+                    int baseColor = fromFeed ? feedColor : Effects.Base(settings, t);
+                    if (fromFeed != usingFeed)
+                    {
+                        usingFeed = fromFeed;
+                        if (fromFeed) Log.Line("Feed: following Synapse ('{0}').", feed.AppId.Name);
+                        else Log.Line("Feed: no colours from Synapse - using the clock effect.");
+                    }
+
 
                     // DSX: the PS5 controller light bar follows the same colour (about 10 updates a second).
                     if (settings.DsxEnabled)
@@ -574,7 +666,14 @@ namespace AuraChromaBridge
                                     buf = new int[d.Lights.Length];
                                     buffers[d] = buf;
                                 }
-                                Effects.Fill(settings, t, baseColor, buf);
+                                if (fromFeed)
+                                {
+                                    for (int j = 0; j < buf.Length; j++) buf[j] = baseColor;   // one colour, like Synapse
+                                }
+                                else
+                                {
+                                    Effects.Fill(settings, t, baseColor, buf);
+                                }
                                 for (int j = 0; j < buf.Length; j++) buf[j] = Rgb.Scale(buf[j], percent);
 
                                 long start = Stopwatch.GetTimestamp();
@@ -648,9 +747,9 @@ namespace AuraChromaBridge
                     {
                         double secs = Math.Max(0.001, (now - statsStart) / 1000.0);
                         double avgMs = asusWrites > 0 ? asusTicks * 1000.0 / Stopwatch.Frequency / asusWrites : 0;
-                        Log.Line("[status] {0:0.0} frames/s | Razer updates/s {1:0.0} | ASUS writes/s {2:0.0}, avg {3:0.0} ms | colour {4} | Razer {5}, ASUS {6}",
+                        Log.Line("[status] {0:0.0} frames/s | Razer updates/s {1:0.0} | ASUS writes/s {2:0.0}, avg {3:0.0} ms | colour {4} | Razer {5}, ASUS {6} | source {7}",
                             frames / secs, razerSends / secs, asusWrites / secs, avgMs, Rgb.Hex(baseColor),
-                            razer != null ? "on" : "off", aura != null ? "on" : "off");
+                            razer != null ? "on" : "off", aura != null ? "on" : "off", fromFeed ? "feed" : "clock");
                         statsStart = now;
                         nextStats = now + 60000;
                         frames = 0;
@@ -666,6 +765,11 @@ namespace AuraChromaBridge
             }
             finally
             {
+                if (feed != null)
+                {
+                    feed.Dispose();
+                    Log.Line("Feed: disconnected.");
+                }
                 if (dsx != null)
                 {
                     dsx.Reset();
@@ -696,13 +800,39 @@ namespace AuraChromaBridge
             return 0;
         }
 
-        private static readonly DateTime EffectEpoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        private static void SetAnchor()
+        {
+            Interlocked.Exchange(ref _anchorUtcTicks, DateTime.UtcNow.Ticks);
+        }
+
+        /// <summary>Connects the feed unless razer_app_id = off. Null, with one log line, if no app ID works.</summary>
+        private static Feed ConnectFeed(Settings settings, out bool notReady)
+        {
+            notReady = false;
+            if (settings.FeedMode == AppIdMode.Off) return null;
+            Feed feed = Feed.Connect(settings, true, out notReady);
+            if (feed == null)
+            {
+                Log.Line(notReady
+                    ? "Feed: Razer's colour feed isn't ready yet - using the clock effect and trying again in a minute."
+                    : "Feed: not available - using the clock effect. Trying again after the next unlock, wake or settings change.");
+            }
+            return feed;
+        }
 
         private static RazerSdk ConnectRazer(Settings settings, bool verbose)
         {
-            if (settings.RazerMask == 0)
+            if (settings.EffectiveRazerMask == 0)
             {
-                if (verbose) Log.Line("Razer: left to Synapse (razer_skip = all) - driving ASUS only.");
+                if (!verbose) return null;
+                if (settings.RazerMask != 0)
+                {
+                    Log.Line("Razer: left to Synapse because razer_app_id is on - the feed follows Synapse, so the bridge only drives ASUS.");
+                }
+                else
+                {
+                    Log.Line("Razer: left to Synapse (razer_skip = all) - driving ASUS only.");
+                }
                 return null;
             }
             RazerSdk razer = new RazerSdk();
@@ -715,7 +845,7 @@ namespace AuraChromaBridge
                     return null;
                 }
 
-                int r = razer.Init(settings.RazerMask);
+                int r = razer.Init(settings.EffectiveRazerMask);
                 if (r != 0)
                 {
                     if (verbose) Log.Line("Razer: Chroma SDK init failed: {0} = {1}. Will keep trying every 10 s.", r, RazerSdk.Describe(r));
@@ -824,6 +954,7 @@ namespace AuraChromaBridge
                 e.Reason == SessionSwitchReason.ConsoleConnect)
             {
                 Log.Line("Windows unlocked - reconnecting.");
+                SetAnchor();
                 _reconnect = true;
             }
         }
@@ -842,6 +973,7 @@ namespace AuraChromaBridge
             if (e.Mode == PowerModes.Resume)
             {
                 Log.Line("PC woke from sleep - reconnecting.");
+                SetAnchor();
                 _reconnect = true;
             }
         }
@@ -857,6 +989,7 @@ namespace AuraChromaBridge
                     if (started != 0 && Stopwatch.GetTimestamp() - started > 10 * Stopwatch.Frequency)
                     {
                         Log.Line("An ASUS write has been stuck for over 10 seconds - restarting.");
+                        if (!Relauncher.HasConsole()) Relauncher.TryRelaunch("an ASUS write got stuck");
                         Log.Close();
                         Environment.Exit(3);
                     }
@@ -864,82 +997,6 @@ namespace AuraChromaBridge
             });
             t.IsBackground = true;
             t.Start();
-        }
-    }
-
-    /// <summary>Optional: Razer's broadcast feed (needs a Razer-approved app ID). Not used by the sync.</summary>
-    internal static class ChromaTest
-    {
-        private static readonly object Gate = new object();
-        private static int[] _latest;
-        private static int _events;
-
-        public static int Run(Settings settings)
-        {
-            Log.Line("== Razer broadcast feed test ==");
-            ChromaBroadcast.LogRegistry();
-            Log.Line("");
-
-            ChromaBroadcast rz = new ChromaBroadcast();
-            string error;
-            if (!rz.Load(out error))
-            {
-                Log.Line(error);
-                return 1;
-            }
-            Log.Line("Loaded {0}", rz.DllPath);
-
-            try
-            {
-                Log.Line("Connecting to Synapse with app ID {0} ...", settings.AppId.ToString("B"));
-                int r = rz.Init(settings.AppId);
-                Log.Line("Init result: {0} = {1}", r, ChromaBroadcast.Describe(r));
-                if (r != 0)
-                {
-                    ChromaBroadcast.LogRazerLogTail(15);
-                    return 1;
-                }
-
-                rz.ColorsReceived += delegate(int[] colors)
-                {
-                    lock (Gate)
-                    {
-                        _latest = colors;
-                        _events++;
-                    }
-                };
-                r = rz.Register();
-                Log.Line("Register result: {0} = {1}", r, ChromaBroadcast.Describe(r));
-                if (r != 0) return 1;
-
-                Log.Line("Listening for 60 seconds...");
-                Stopwatch sw = Stopwatch.StartNew();
-                string lastLine = null;
-                while (sw.ElapsedMilliseconds < 60000)
-                {
-                    Thread.Sleep(250);
-                    int[] colors;
-                    lock (Gate) colors = _latest;
-                    if (colors == null) continue;
-                    StringBuilder sb = new StringBuilder();
-                    foreach (int c in colors) sb.Append(Rgb.Hex(c)).Append("  ");
-                    string line = sb.ToString();
-                    if (line != lastLine)
-                    {
-                        Log.Line("  {0,5:0.0}s  {1}", sw.ElapsedMilliseconds / 1000.0, line);
-                        lastLine = line;
-                    }
-                }
-
-                int total;
-                lock (Gate) total = _events;
-                Log.Line("{0} colour updates received.", total);
-                return total > 0 ? 0 : 1;
-            }
-            finally
-            {
-                rz.Dispose();
-            }
         }
     }
 }
