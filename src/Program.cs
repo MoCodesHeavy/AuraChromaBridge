@@ -12,9 +12,15 @@ namespace AuraChromaBridge
 {
     internal static class Program
     {
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.0";
 
         private static string _dataDir;
+
+        /// <summary>The arguments this copy was started with (used to start a fresh copy).</summary>
+        public static string[] Args = new string[0];
+
+        /// <summary>How many times the background copy has restarted itself (relaunch=N), 0 for a normal start.</summary>
+        public static int RelaunchCount;
 
         /// <summary>
         /// Folder with settings.ini, logs and stop.request. Defaults to the exe's folder;
@@ -36,12 +42,13 @@ namespace AuraChromaBridge
             string mode = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "run";
             if (mode.StartsWith("--")) mode = mode.Substring(2);
             if (mode == "bridge") mode = "run";
-            if (mode != "aura-test" && mode != "identify" && mode != "razer-test" && mode != "run" && mode != "chroma-test")
+            if (mode != "aura-test" && mode != "identify" && mode != "razer-test" && mode != "run" && mode != "scan")
             {
-                Console.WriteLine("Usage: AuraChromaBridge.exe [run | aura-test | identify | razer-test | chroma-test] [key=value ...]");
+                Console.WriteLine("Usage: AuraChromaBridge.exe [run | scan [all] | aura-test | identify | razer-test] [key=value ...]");
                 return 2;
             }
 
+            Args = args;
             for (int i = 1; i < args.Length; i++)
             {
                 if (args[i].StartsWith("data=", StringComparison.OrdinalIgnoreCase))
@@ -49,11 +56,16 @@ namespace AuraChromaBridge
                     string dir = args[i].Substring(5).Trim().Trim('"');
                     if (dir.Length > 0) _dataDir = dir;
                 }
+                else if (args[i].StartsWith("relaunch=", StringComparison.OrdinalIgnoreCase))
+                {
+                    int n;
+                    if (int.TryParse(args[i].Substring(9).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0) RelaunchCount = n;
+                }
             }
 
             try
             {
-                Log.Open(mode);
+                Log.Open(mode, RelaunchCount > 0);
             }
             catch (Exception ex)
             {
@@ -62,6 +74,11 @@ namespace AuraChromaBridge
 
             try
             {
+                if (RelaunchCount > 0)
+                {
+                    Log.Line("");
+                    Log.Line("Started again after a stuck ASUS write (restart {0} of {1}).", RelaunchCount, Relauncher.MaxRelaunches);
+                }
                 Log.Line("AuraChromaBridge {0} - {1} (data folder: {2})", Version, mode, DataDir);
                 Log.Line("Windows {0} | 64-bit process: {1} | admin: {2}",
                     Environment.OSVersion.Version, Environment.Is64BitProcess ? "yes" : "no", IsAdmin() ? "yes" : "NO");
@@ -77,6 +94,7 @@ namespace AuraChromaBridge
                     if (eq <= 0) continue;
                     string key = args[i].Substring(0, eq).Trim();
                     if (key.Equals("data", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (key.Equals("relaunch", StringComparison.OrdinalIgnoreCase)) continue;
                     settings.Set(key, args[i].Substring(eq + 1).Trim());
                 }
                 Log.Line("Settings: {0}", settings);
@@ -85,7 +103,15 @@ namespace AuraChromaBridge
                 if (mode == "aura-test") return AuraTest.Run(settings);
                 if (mode == "identify") return IdentifyTest.Run(settings);
                 if (mode == "razer-test") return RazerTest.Run(settings);
-                if (mode == "chroma-test") return ChromaTest.Run(settings);
+                if (mode == "scan")
+                {
+                    bool all = false;
+                    for (int i = 1; i < args.Length; i++)
+                    {
+                        if (args[i].Trim().Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
+                    }
+                    return Scan.Run(settings, all);
+                }
                 return Sync.Run(settings);
             }
             catch (Exception ex)
@@ -131,14 +157,25 @@ namespace AuraChromaBridge
 
         public static string FilePath { get; private set; }
 
-        public static void Open(string name)
+        /// <summary>Opens logs\&lt;name&gt;.log. append = keep what's there (a restarted copy keeps the reason it restarted).</summary>
+        public static void Open(string name, bool append)
         {
             string dir = Path.Combine(Program.DataDir, "logs");
             Directory.CreateDirectory(dir);
-            FilePath = Path.Combine(dir, name + ".log");
-            FileStream stream = new FileStream(FilePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
-            _file = new StreamWriter(stream, new UTF8Encoding(false));
-            _file.AutoFlush = true;
+            OpenFile(Path.Combine(dir, name + ".log"), append);
+        }
+
+        public static void OpenFile(string path, bool append)
+        {
+            lock (Gate)
+            {
+                if (_file != null) _file.Dispose();
+                FilePath = path;
+                FileStream stream = new FileStream(path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+                _file = new StreamWriter(stream, new UTF8Encoding(false));
+                _file.AutoFlush = true;
+            }
         }
 
         public static void Line(string format, params object[] args)
@@ -178,9 +215,6 @@ namespace AuraChromaBridge
     /// <summary>Settings from settings.ini (key = value, ; starts a comment).</summary>
     internal sealed class Settings
     {
-        // Only used by the optional chroma-test (Razer broadcast feed): Razer's "Chroma Broadcast Sample Application" ID.
-        public static readonly Guid RazerSampleAppId = new Guid("8FB61199-44F5-4C53-A706-747373A21796");
-
         public static readonly string[] EffectNames = { "static", "breathing", "spectrum", "wave" };
         public static readonly string[] RazerStyles = { "auto", "static", "custom" };
 
@@ -197,7 +231,9 @@ namespace AuraChromaBridge
         public string[] RazerSkip = new string[0];
         public string[] Only = new string[0];
         public string[] Skip = new string[0];
-        public Guid AppId = RazerSampleAppId;
+        public AppIdMode FeedMode = AppIdMode.Off;
+        public Guid FeedAppId = Guid.Empty;
+        public string ClockAnchor = "fixed";
 
         public static Settings Load(string path)
         {
@@ -292,10 +328,22 @@ namespace AuraChromaBridge
                 case "skip":
                     Skip = SplitList(value);
                     break;
-                case "appid":
-                    Guid parsed;
-                    if (Guid.TryParse(value, out parsed)) AppId = parsed;
-                    else Log.Line("settings: appid '{0}' isn't a valid GUID - keeping {1}", value, AppId.ToString("B"));
+                case "razer_app_id":
+                    string fv = value.Trim().ToLowerInvariant();
+                    Guid feedId;
+                    if (fv == "off") FeedMode = AppIdMode.Off;
+                    else if (fv == "auto") FeedMode = AppIdMode.Auto;
+                    else if (Guid.TryParse(fv, out feedId))
+                    {
+                        FeedMode = AppIdMode.Pinned;
+                        FeedAppId = feedId;
+                    }
+                    else Log.Line("settings: razer_app_id must be off, auto or an app ID like {{4C24AD2B-D0A6-409F-B895-EC7632F3BEE6}} - keeping {0}", FeedKey);
+                    break;
+                case "clock_anchor":
+                    string ca = value.Trim().ToLowerInvariant();
+                    if (ca == "fixed" || ca == "unlock") ClockAnchor = ca;
+                    else Log.Line("settings: clock_anchor must be fixed or unlock - keeping '{0}'", ClockAnchor);
                     break;
                 default:
                     Log.Line("settings: unknown key '{0}' ignored", key);
@@ -329,6 +377,29 @@ namespace AuraChromaBridge
             get { return RazerSdk.MaskFor(RazerSkip); }
         }
 
+        /// <summary>
+        /// Razer device kinds the sync drives: none while razer_app_id is on, because the feed follows Synapse and
+        /// would otherwise receive the bridge's own colours back. The tests still use RazerMask.
+        /// </summary>
+        public int EffectiveRazerMask
+        {
+            get { return FeedMode == AppIdMode.Off ? RazerMask : 0; }
+        }
+
+        /// <summary>Text that changes whenever razer_app_id changes: off, auto, or the pinned ID.</summary>
+        public string FeedKey
+        {
+            get
+            {
+                switch (FeedMode)
+                {
+                    case AppIdMode.Auto: return "auto";
+                    case AppIdMode.Pinned: return FeedAppId.ToString("B");
+                    default: return "off";
+                }
+            }
+        }
+
         /// <summary>Text that changes whenever the ASUS device selection changes.</summary>
         public string DeviceFilterKey
         {
@@ -338,9 +409,9 @@ namespace AuraChromaBridge
         public override string ToString()
         {
             return string.Format(CultureInfo.InvariantCulture,
-                "effect={0} color={1} speed={2}s brightness={3} asus_brightness={4} maxfps={5} razer_style={6} razer_skip=[{7}] only=[{8}] skip=[{9}]",
+                "effect={0} color={1} speed={2}s brightness={3} asus_brightness={4} maxfps={5} razer_style={6} razer_skip=[{7}] only=[{8}] skip=[{9}] razer_app_id={10} clock_anchor={11}",
                 Effect, Rgb.Hex(Color), Speed, Brightness, AsusBrightness, MaxFps, RazerStyle, string.Join(", ", RazerSkip),
-                string.Join(", ", Only), string.Join(", ", Skip));
+                string.Join(", ", Only), string.Join(", ", Skip), FeedKey, ClockAnchor);
         }
 
         private static int ParseInt(string key, string value, int min, int max, int fallback)
@@ -455,6 +526,19 @@ namespace AuraChromaBridge
     /// <summary>The lighting effects. Everything is a function of time, so Razer and ASUS stay in step.</summary>
     internal static class Effects
     {
+        /// <summary>clock_anchor = fixed counts from here, so the cycle position is the same after every restart.</summary>
+        public static readonly DateTime Epoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>
+        /// Seconds into the clock effect. clock_anchor = fixed counts from Epoch; unlock counts from the last
+        /// unlock or wake (anchorUtc), so phase is minus the delay before Synapse restarts its cycle.
+        /// </summary>
+        public static double ClockSeconds(Settings s, DateTime anchorUtc, DateTime nowUtc)
+        {
+            DateTime from = s.ClockAnchor == "unlock" ? anchorUtc : Epoch;
+            return (nowUtc - from).TotalSeconds + s.Phase;
+        }
+
         /// <summary>The colour every Razer device shows (and the first ASUS LED), before brightness.</summary>
         public static int Base(Settings s, double t)
         {
