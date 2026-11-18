@@ -1,6 +1,7 @@
 // Small commands the installer runs. They print or write a result and exit; no log file, no banner.
 //   get-setting KEY [data=DIR] [out=FILE]   the value of KEY in settings.ini (empty if absent)
 //   set-setting KEY VALUE [data=DIR]        sets KEY in settings.ini, leaving every other line alone
+//   set-feed on|off enabled|disabled [data=DIR]   sets razer_app_id from setup's option (see FeedChoice)
 //   task-data [out=FILE]                    the data folder of the existing AuraChromaBridge task (empty if none)
 
 using System;
@@ -13,7 +14,7 @@ namespace AuraChromaBridge
     {
         public static bool Handles(string mode)
         {
-            return mode == "get-setting" || mode == "set-setting" || mode == "task-data";
+            return mode == "get-setting" || mode == "set-setting" || mode == "set-feed" || mode == "task-data";
         }
 
         /// <summary>Runs one command. out = file to write the result to (null = the console). 0 = success, 1 = error, 2 = usage.</summary>
@@ -24,6 +25,19 @@ namespace AuraChromaBridge
                 if (mode == "task-data")
                 {
                     return Write(TaskInfo.ExistingDataFolder(), outFile);
+                }
+
+                if (mode == "set-feed")
+                {
+                    string state = Positional(args, 1), page = Positional(args, 2);
+                    if (state == null || page == null) return Usage();
+                    string existing = SettingsFile.Get(Program.SettingsPath, "razer_app_id");
+                    string feed = FeedChoice.Value(state.Equals("on", StringComparison.OrdinalIgnoreCase),
+                        page.Equals("enabled", StringComparison.OrdinalIgnoreCase), existing);
+                    if (feed == null) return 0;
+                    Directory.CreateDirectory(Program.DataDir);
+                    SettingsFile.Set(Program.SettingsPath, "razer_app_id", feed);
+                    return 0;
                 }
 
                 string key = Positional(args, 1);
@@ -76,7 +90,7 @@ namespace AuraChromaBridge
 
         private static int Usage()
         {
-            Console.Error.WriteLine("Usage: AuraChromaBridge.exe get-setting KEY [data=DIR] [out=FILE] | set-setting KEY VALUE [data=DIR] | task-data [out=FILE]");
+            Console.Error.WriteLine("Usage: AuraChromaBridge.exe get-setting KEY [data=DIR] [out=FILE] | set-setting KEY VALUE [data=DIR] | set-feed on|off enabled|disabled [data=DIR] | task-data [out=FILE]");
             return 2;
         }
     }

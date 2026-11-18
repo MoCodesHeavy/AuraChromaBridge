@@ -117,11 +117,6 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/im AuraChromaBridge.exe /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-function IsGuid(const Value: String): Boolean;
-begin
-  Result := (Length(Value) >= 36) and (Pos('-', Value) > 0);
-end;
-
 procedure InitializeWizard;
 var
   Existing: String;
@@ -181,14 +176,12 @@ var
 begin
   if CurStep <> ssPostInstall then Exit;
 
-  if not FeedPage.Values[0] then
-    Value := 'off'
-  else if IsGuid(ExistingFeed) then
-    Value := ExistingFeed   // an ID set by hand, e.g. Razer's official one: keep it
-  else
-    Value := 'auto';
+  // The exe decides the value (FeedChoice): off, auto, a hand-set ID kept, or the file left alone when the
+  // option was greyed out on an upgrade.
+  if FeedPage.Values[0] then Value := 'on' else Value := 'off';
+  if FeedPage.CheckListBox.ItemEnabled[0] then Value := Value + ' enabled' else Value := Value + ' disabled';
   if not Exec(ExpandConstant('{app}\AuraChromaBridge.exe'),
-              'set-setting razer_app_id ' + Value + ' data="' + DataDirValue + '"', '',
+              'set-feed ' + Value + ' data="' + DataDirValue + '"', '',
               SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
     SuppressibleMsgBox('Could not set razer_app_id in ' + DataDirValue + '\settings.ini (code ' + IntToStr(ResultCode) + ').',
                        mbError, MB_OK, IDOK);
