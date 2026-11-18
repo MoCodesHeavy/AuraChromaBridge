@@ -12,7 +12,7 @@ namespace AuraChromaBridge
 {
     internal static class Program
     {
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         private static string _dataDir;
 
@@ -42,15 +42,23 @@ namespace AuraChromaBridge
             string mode = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "run";
             if (mode.StartsWith("--")) mode = mode.Substring(2);
             if (mode == "bridge") mode = "run";
-            if (mode != "aura-test" && mode != "identify" && mode != "razer-test" && mode != "run" && mode != "scan")
+            if (mode != "aura-test" && mode != "identify" && mode != "razer-test" && mode != "run" && mode != "scan"
+                && !SetupCommands.Handles(mode))
             {
-                Console.WriteLine("Usage: AuraChromaBridge.exe [run | scan [all] | aura-test | identify | razer-test] [key=value ...]");
+                Console.WriteLine("Usage: AuraChromaBridge.exe [run | scan [all] [pause] | aura-test | identify | razer-test] [key=value ...]");
+                Console.WriteLine("       AuraChromaBridge.exe get-setting KEY | set-setting KEY VALUE | task-data  [data=DIR] [out=FILE]");
                 return 2;
             }
 
             Args = args;
+            string outFile = null;
             for (int i = 1; i < args.Length; i++)
             {
+                if (args[i].StartsWith("out=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string file = args[i].Substring(4).Trim().Trim('"');
+                    if (file.Length > 0) outFile = file;
+                }
                 if (args[i].StartsWith("data=", StringComparison.OrdinalIgnoreCase))
                 {
                     string dir = args[i].Substring(5).Trim().Trim('"');
@@ -62,6 +70,8 @@ namespace AuraChromaBridge
                     if (int.TryParse(args[i].Substring(9).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0) RelaunchCount = n;
                 }
             }
+
+            if (SetupCommands.Handles(mode)) return SetupCommands.Run(mode, args, outFile);
 
             try
             {
@@ -95,6 +105,7 @@ namespace AuraChromaBridge
                     string key = args[i].Substring(0, eq).Trim();
                     if (key.Equals("data", StringComparison.OrdinalIgnoreCase)) continue;
                     if (key.Equals("relaunch", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (key.Equals("out", StringComparison.OrdinalIgnoreCase)) continue;
                     settings.Set(key, args[i].Substring(eq + 1).Trim());
                 }
                 Log.Line("Settings: {0}", settings);
