@@ -19,6 +19,7 @@ namespace AuraChromaBridge.Tests
             tests.Add(new KeyValuePair<string, Action>("first_accepted_stops_at_first_zero", FirstAcceptedStopsAtFirstZero));
             tests.Add(new KeyValuePair<string, Action>("first_accepted_all_refused", FirstAcceptedAllRefused));
             tests.Add(new KeyValuePair<string, Action>("first_accepted_stops_at_in_use", FirstAcceptedStopsAtInUse));
+            tests.Add(new KeyValuePair<string, Action>("first_accepted_sync_skips_in_use", FirstAcceptedSyncSkipsInUse));
             tests.Add(new KeyValuePair<string, Action>("probe_all_tries_everything", ProbeAllTriesEverything));
         }
 
@@ -115,6 +116,20 @@ namespace AuraChromaBridge.Tests
             Check.True(winner == null, "no winner");
             Check.Equal(4309, result, "code");
             Check.Equal(64, reports, "reports");
+        }
+
+        // The sync moves past an ID another program holds (say Chroma Control with its own ID) to one that works.
+        private static void FirstAcceptedSyncSkipsInUse()
+        {
+            KnownAppId[] c = KnownAppIds.Candidates(AppIdMode.Auto, Guid.Empty);
+            Guid first = c[0].Id, third = c[2].Id;
+            int result;
+            KnownAppId winner = KnownAppIds.FirstAccepted(c,
+                delegate(Guid id) { return id == first ? 1152 : (id == third ? 0 : 4309); },
+                null, false, out result);
+            Check.True(winner != null, "a winner");
+            Check.Equal(third, winner.Id, "the first ID that works");
+            Check.Equal(0, result, "code");
         }
 
         // The running sync already holds this ID: stop there instead of connecting a second brand's ID.

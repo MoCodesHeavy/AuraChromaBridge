@@ -147,12 +147,22 @@ namespace AuraChromaBridge
         /// </summary>
         public static KnownAppId FirstAccepted(IList<KnownAppId> candidates, Func<Guid, int> tryInit, Action<KnownAppId, int> report, out int code)
         {
+            return FirstAccepted(candidates, tryInit, report, true, out code);
+        }
+
+        /// <summary>
+        /// As above; with stopAtInUse = false an ID that is in use is skipped like a refused one. The scan stops
+        /// there (it's probably the running sync's ID); the sync moves on, since another program may hold that ID.
+        /// </summary>
+        public static KnownAppId FirstAccepted(IList<KnownAppId> candidates, Func<Guid, int> tryInit, Action<KnownAppId, int> report,
+            bool stopAtInUse, out int code)
+        {
             code = 0;
             foreach (KnownAppId candidate in candidates)
             {
                 code = tryInit(candidate.Id);
                 if (report != null) report(candidate, code);
-                if (code == 0 || code == InUse) return candidate;
+                if (code == 0 || (stopAtInUse && code == InUse)) return candidate;
             }
             return null;
         }

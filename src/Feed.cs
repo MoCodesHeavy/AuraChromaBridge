@@ -59,14 +59,7 @@ namespace AuraChromaBridge
                         int n;
                         codes.TryGetValue(code, out n);
                         codes[code] = n + 1;
-                    }, out result);
-
-                if (winner != null && result == KnownAppIds.InUse)
-                {
-                    if (verbose) Log.Line("Feed: the '{0}' app ID is already in use (another copy of the bridge?) - trying again later.", winner.Name);
-                    notReady = true;
-                    return null;
-                }
+                    }, false, out result);   // another program may hold an ID: skip it and try the next
 
                 if (winner == null)
                 {
