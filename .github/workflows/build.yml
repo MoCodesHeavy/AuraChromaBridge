@@ -45,3 +45,31 @@ jobs:
           path: |
             AuraChromaBridge.exe
             AuraChromaBridge-bg.exe
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe -ErrorAction Stop).Source }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" installer\AuraChromaBridge.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          Get-Item dist\AuraChromaBridge-Setup-x64.exe
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuraChromaBridge-${{ steps.version.outputs.version }}-Setup-x64
+          path: dist/AuraChromaBridge-Setup-x64.exe
+
+      - name: Draft release (v* tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist\AuraChromaBridge-Setup-x64.exe `
+            --draft --title "AuraChromaBridge ${{ steps.version.outputs.version }}" --generate-notes
