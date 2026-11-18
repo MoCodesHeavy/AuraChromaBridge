@@ -44,7 +44,9 @@ namespace AuraChromaBridge
         {
             try
             {
-                ProcessStartInfo start = new ProcessStartInfo("schtasks", "/query /tn " + TaskName + " /xml");
+                // Full path: setup runs this as administrator, so no lookup in the current folder.
+                string schtasks = System.IO.Path.Combine(Environment.SystemDirectory, "schtasks.exe");
+                ProcessStartInfo start = new ProcessStartInfo(schtasks, "/query /tn " + TaskName + " /xml");
                 start.UseShellExecute = false;
                 start.RedirectStandardOutput = true;
                 start.RedirectStandardError = true;

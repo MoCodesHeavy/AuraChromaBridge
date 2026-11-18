@@ -60,7 +60,7 @@ Name: "{group}\Uninstall AuraChromaBridge"; Filename: "{uninstallexe}"
 
 [Run]
 ; Finish page, in this order: the scan first (while the sync isn't holding the app ID), then start the sync.
-Filename: "{app}\AuraChromaBridge.exe"; Parameters: "scan pause data=""{code:DataDir}"""; WorkingDir: "{code:DataDir}"; Description: "Run the Razer app ID scan now"; Flags: postinstall waituntilterminated; Check: FeedChosen
+Filename: "{app}\AuraChromaBridge.exe"; Parameters: "scan pause data=""{code:DataDir}"""; WorkingDir: "{code:DataDir}"; Description: "Run the Razer app ID scan now"; Flags: postinstall waituntilterminated skipifsilent; Check: FeedChosen
 Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn {#TaskName}"; Description: "Start the sync now"; Flags: postinstall runhidden
 
 [Messages]
@@ -195,7 +195,7 @@ begin
 
   Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\install-task.ps1') + '"' +
             ' -Exe "' + ExpandConstant('{app}\AuraChromaBridge-bg.exe') + '" -Data "' + DataDirValue + '"';
-  if not Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
     SuppressibleMsgBox('Setting up the start-with-Windows task failed (code ' + IntToStr(ResultCode) + '). ' +
                        'Run setup again, or start the sync from the Start menu.', mbError, MB_OK, IDOK);
 end;
