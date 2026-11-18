@@ -49,6 +49,7 @@ namespace AuraChromaBridge
                 }
 
                 int tried = 0;
+                int result;
                 Dictionary<int, int> codes = new Dictionary<int, int>();
                 KnownAppId winner = KnownAppIds.FirstAccepted(candidates,
                     delegate(Guid id) { return broadcast.Init(id); },
@@ -58,7 +59,14 @@ namespace AuraChromaBridge
                         int n;
                         codes.TryGetValue(code, out n);
                         codes[code] = n + 1;
-                    });
+                    }, out result);
+
+                if (winner != null && result == KnownAppIds.InUse)
+                {
+                    if (verbose) Log.Line("Feed: the '{0}' app ID is already in use (another copy of the bridge?) - trying again later.", winner.Name);
+                    notReady = true;
+                    return null;
+                }
 
                 if (winner == null)
                 {

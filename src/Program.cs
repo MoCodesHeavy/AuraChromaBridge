@@ -116,12 +116,13 @@ namespace AuraChromaBridge
                 if (mode == "razer-test") return RazerTest.Run(settings);
                 if (mode == "scan")
                 {
-                    bool all = false;
+                    bool all = false, pause = false;
                     for (int i = 1; i < args.Length; i++)
                     {
                         if (args[i].Trim().Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
+                        if (args[i].Trim().Equals("pause", StringComparison.OrdinalIgnoreCase)) pause = true;
                     }
-                    return Scan.Run(settings, all);
+                    return Scan.Run(settings, all, pause);
                 }
                 return Sync.Run(settings);
             }

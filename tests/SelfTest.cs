@@ -22,6 +22,7 @@ namespace AuraChromaBridge.Tests
             FeedReadyTests.AddTo(tests);
             SettingsFileTests.AddTo(tests);
             TaskInfoTests.AddTo(tests);
+            ScanTests.AddTo(tests);
 
             int passed = 0, failed = 0;
             foreach (KeyValuePair<string, Action> test in tests)
