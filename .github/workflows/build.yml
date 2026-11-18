@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write   # only used to create draft releases from v* tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the bridge (Windows' built-in C# compiler)
+        shell: cmd
+        run: |
+          call build.cmd main || exit /b 1
+          call build.cmd bg || exit /b 1
+
+      - name: Self-test
+        shell: cmd
+        run: |
+          call build.cmd selftest || exit /b 1
+          AuraChromaBridge-selftest.exe
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path src/Program.cs -Pattern 'Version = "([^"]+)"'
+          $v = $m.Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "Tag $env:GITHUB_REF_NAME doesn't match Program.Version $v"
+          }
+
+      - name: Upload the exes
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuraChromaBridge-${{ steps.version.outputs.version }}-exe
+          path: |
+            AuraChromaBridge.exe
+            AuraChromaBridge-bg.exe
