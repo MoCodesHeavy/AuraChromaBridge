@@ -76,7 +76,7 @@ var
   AsusFound: Boolean;
   FeedPage: TInputOptionWizardPage;
 
-{ The folder with settings.ini and logs: the existing task's folder, else %LOCALAPPDATA%\AuraChromaBridge. }
+// The folder with settings.ini and logs: the existing task's folder, else %LOCALAPPDATA%\AuraChromaBridge.
 function DataDir(Param: String): String;
 begin
   Result := DataDirValue;
@@ -87,7 +87,7 @@ begin
   Result := FeedPage.Values[0];
 end;
 
-{ Runs a setup command of the console exe extracted to {tmp} and returns what it wrote to out=. }
+// Runs a setup command of the console exe extracted to {tmp} and returns what it wrote to out=.
 function RunCapture(const Params: String): String;
 var
   OutFile: String;
@@ -103,7 +103,7 @@ begin
       Result := Trim(String(Text));
 end;
 
-{ Asks a running sync to stop (it hands the lights back to Synapse and Armoury Crate), then makes sure it has. }
+// Asks a running sync to stop (it hands the lights back to Synapse and Armoury Crate), then makes sure it has.
 procedure StopSync(const Dir: String);
 var
   ResultCode: Integer;
@@ -184,7 +184,7 @@ begin
   if not FeedPage.Values[0] then
     Value := 'off'
   else if IsGuid(ExistingFeed) then
-    Value := ExistingFeed   { an ID set by hand, e.g. Razer's official one: keep it }
+    Value := ExistingFeed   // an ID set by hand, e.g. Razer's official one: keep it
   else
     Value := 'auto';
   if not Exec(ExpandConstant('{app}\AuraChromaBridge.exe'),
@@ -214,8 +214,8 @@ begin
 
   if CurUninstallStep = usPostUninstall then
   begin
-    { Only the folder setup itself creates is offered for deletion. A folder reused from an earlier install
-      may be someone's project folder (source code and all), so it is always kept. }
+    // Only the folder setup itself creates is offered for deletion. A folder reused from an earlier install
+    // may be someone's project folder (source code and all), so it is always kept.
     if (UninstallDataDir <> '') and DirExists(UninstallDataDir) and
        (CompareText(RemoveBackslash(UninstallDataDir), ExpandConstant('{localappdata}\AuraChromaBridge')) = 0) then
     begin
