@@ -1,6 +1,6 @@
 # AuraChromaBridge 0.8.0 - x64 installer (design)
 
-Approach chosen by Mohamed, 2026-11-18. Awaiting approval of this document.
+Approved by Mohamed, 2026-11-18.
 
 ## Intent
 
