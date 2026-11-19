@@ -10,16 +10,52 @@ using System.Threading;
 
 namespace AuraChromaBridge
 {
+    /// <summary>What the colours received during a scan mean.</summary>
+    internal enum ScanVerdict
+    {
+        NoColours,
+        OnlyBlack,
+        Works
+    }
+
     internal static class Scan
     {
         private const int ListenMs = 15000;
-        private const int InUse = 1152;
+        private const int InUse = KnownAppIds.InUse;
 
         private static readonly object Gate = new object();
         private static int[] _latest;
         private static int _events;
+        private static bool _sawNonBlack;
 
-        public static int Run(Settings settings, bool all)
+        /// <summary>What the colours received while listening mean.</summary>
+        public static ScanVerdict Verdict(int updates, bool sawNonBlack)
+        {
+            if (updates == 0) return ScanVerdict.NoColours;
+            return sawNonBlack ? ScanVerdict.Works : ScanVerdict.OnlyBlack;
+        }
+
+        /// <summary>pauseAtEnd: wait for a key before returning, for the Start-menu shortcut's window.</summary>
+        public static int Run(Settings settings, bool all, bool pauseAtEnd)
+        {
+            int result = Run(settings, all);
+            if (pauseAtEnd)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Press any key to close.");
+                try
+                {
+                    Console.ReadKey(true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // no console to read from (output redirected): nothing to wait for
+                }
+            }
+            return result;
+        }
+
+        private static int Run(Settings settings, bool all)
         {
             Log.Line("== Scan: which Razer app IDs does Synapse accept on this PC? ==");
             ChromaBroadcast.LogRegistry();
@@ -76,9 +112,16 @@ namespace AuraChromaBridge
                 else
                 {
                     Log.Line("Trying app IDs until Synapse accepts one...");
+                    int result;
                     winner = KnownAppIds.FirstAccepted(candidates,
                         delegate(Guid id) { return broadcast.Init(id); },
-                        delegate(KnownAppId id, int code) { Report(id, code, codes); });
+                        delegate(KnownAppId id, int code) { Report(id, code, codes); }, out result);
+                    if (winner != null && result == InUse)
+                    {
+                        Log.Line("");
+                        Log.Line("The sync is already connected with '{0}'. Stop it first (Start menu > AuraChromaBridge > Stop sync), then scan again.", winner.Name);
+                        return 1;
+                    }
                 }
 
                 Log.Line("");
@@ -127,6 +170,13 @@ namespace AuraChromaBridge
                 {
                     _latest = colors;
                     _events++;
+                    if (colors != null)
+                    {
+                        foreach (int c in colors)
+                        {
+                            if ((c & 0xFFFFFF) != 0) _sawNonBlack = true;
+                        }
+                    }
                 }
             };
             int r = broadcast.Register();
@@ -156,12 +206,23 @@ namespace AuraChromaBridge
             }
 
             int total;
-            lock (Gate) total = _events;
+            bool sawNonBlack;
+            lock (Gate)
+            {
+                total = _events;
+                sawNonBlack = _sawNonBlack;
+            }
             Log.Line("{0} colour updates received.", total);
             Log.Line("");
-            if (total == 0)
+            ScanVerdict verdict = Verdict(total, sawNonBlack);
+            if (verdict == ScanVerdict.NoColours)
             {
                 Log.Line("Synapse accepted '{0}' but sent no colours. Open the Razer Chroma app > Chroma Connect, switch '{0}' on, then run the scan again.", winner.Name);
+                return 1;
+            }
+            if (verdict == ScanVerdict.OnlyBlack)
+            {
+                Log.Line("Synapse accepted '{0}' but sent only black. In the Razer Chroma app > Connect, set the effect to one that lights Connect devices (for example Quick Effects > Spectrum Cycling), then scan again.", winner.Name);
                 return 1;
             }
             Log.Line("The feed works with '{0}'. In settings.ini set razer_app_id = auto (or razer_app_id = {1}).", winner.Name, winner.Id.ToString("B"));

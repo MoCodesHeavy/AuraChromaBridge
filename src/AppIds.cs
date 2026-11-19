@@ -43,6 +43,9 @@ namespace AuraChromaBridge
     {
         public const string PinnedName = "razer_app_id";
 
+        /// <summary>Init result: this ID is already connected (by the running sync, or another copy).</summary>
+        public const int InUse = 1152;
+
         public static readonly KnownAppId[] All =
         {
             new KnownAppId(new Guid("{DEF05DCE-1662-4D9A-A312-A31028651915}"), "Chroma Control - ASUS"),
@@ -138,14 +141,28 @@ namespace AuraChromaBridge
             return list.ToArray();
         }
 
-        /// <summary>Tries each ID in order and stops at the first one Synapse accepts (result 0). Null if none.</summary>
-        public static KnownAppId FirstAccepted(IList<KnownAppId> candidates, Func<Guid, int> tryInit, Action<KnownAppId, int> report)
+        /// <summary>
+        /// Tries each ID in order and stops at the first one Synapse accepts (code 0) or that is already in use
+        /// (code InUse), returning it. Null, with the last code, when every ID was refused.
+        /// </summary>
+        public static KnownAppId FirstAccepted(IList<KnownAppId> candidates, Func<Guid, int> tryInit, Action<KnownAppId, int> report, out int code)
         {
+            return FirstAccepted(candidates, tryInit, report, true, out code);
+        }
+
+        /// <summary>
+        /// As above; with stopAtInUse = false an ID that is in use is skipped like a refused one. The scan stops
+        /// there (it's probably the running sync's ID); the sync moves on, since another program may hold that ID.
+        /// </summary>
+        public static KnownAppId FirstAccepted(IList<KnownAppId> candidates, Func<Guid, int> tryInit, Action<KnownAppId, int> report,
+            bool stopAtInUse, out int code)
+        {
+            code = 0;
             foreach (KnownAppId candidate in candidates)
             {
-                int result = tryInit(candidate.Id);
-                if (report != null) report(candidate, result);
-                if (result == 0) return candidate;
+                code = tryInit(candidate.Id);
+                if (report != null) report(candidate, code);
+                if (code == 0 || (stopAtInUse && code == InUse)) return candidate;
             }
             return null;
         }

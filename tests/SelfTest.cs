@@ -20,6 +20,11 @@ namespace AuraChromaBridge.Tests
             NativeCallbacksTests.AddTo(tests);
             LogTests.AddTo(tests);
             FeedReadyTests.AddTo(tests);
+            SettingsFileTests.AddTo(tests);
+            TaskInfoTests.AddTo(tests);
+            ScanTests.AddTo(tests);
+            InstallerScriptTests.AddTo(tests);
+            FeedChoiceTests.AddTo(tests);
 
             int passed = 0, failed = 0;
             foreach (KeyValuePair<string, Action> test in tests)

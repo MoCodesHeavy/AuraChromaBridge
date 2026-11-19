@@ -49,6 +49,7 @@ namespace AuraChromaBridge
                 }
 
                 int tried = 0;
+                int result;
                 Dictionary<int, int> codes = new Dictionary<int, int>();
                 KnownAppId winner = KnownAppIds.FirstAccepted(candidates,
                     delegate(Guid id) { return broadcast.Init(id); },
@@ -58,7 +59,7 @@ namespace AuraChromaBridge
                         int n;
                         codes.TryGetValue(code, out n);
                         codes[code] = n + 1;
-                    });
+                    }, false, out result);   // another program may hold an ID: skip it and try the next
 
                 if (winner == null)
                 {
